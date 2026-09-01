@@ -19,7 +19,7 @@ class SelfModel {
   async snapshot(sessionId) {
     const { data, error } = await this.db.from("jarvis_self_model").select("model").eq("session_id", sessionId).maybeSingle();
     if (error) throw error;
-    return { ...DEFAULT_SELF, ...(data?.model || {}) };
+    return normalize(data?.model || {});
   }
 
   async ensure(sessionId) {
@@ -32,9 +32,19 @@ class SelfModel {
   async update(sessionId, update) {
     const model = await this.snapshot(sessionId);
     const field = String(update.field || "").trim();
-    if (!field || field.includes("__") || !Object.prototype.hasOwnProperty.call(model, field)) return model;
+    if (!field || field.includes("__") || !Object.prototype.hasOwnProperty.call(DEFAULT_SELF, field)) return model;
     model[field] = update.value;
-    model.last_reflection = new Date().toISOString();
+    return this.persist(sessionId, normalize(model));
+  }
+
+  async observeCapabilities(sessionId, capabilities = []) {
+    const model = await this.snapshot(sessionId);
+    const known = new Map((model.known_capabilities || []).filter(Boolean).map(name => [name, name]));
+    for (const capability of capabilities) {
+      const name = typeof capability === "string" ? capability : capability?.name;
+      if (name) known.set(name, name);
+    }
+    model.known_capabilities = [...known.keys()].slice(-100);
     return this.persist(sessionId, model);
   }
 
@@ -48,17 +58,34 @@ class SelfModel {
     const total = model.successes + model.failures;
     if (total) model.confidence = Math.max(0, Math.min(1, model.successes / total));
     if (lesson) model.lessons = [...(model.lessons || []), lesson].slice(-20);
-    const failedTools = observations.filter(o => o?.result?.ok === false).map(o => o.tool);
+    const failedTools = observations.filter(o => o?.result?.ok === false).map(o => o.tool).filter(Boolean);
     if (failedTools.length) model.limitations = [...new Set([...(model.limitations || []), ...failedTools])].slice(-30);
+    const completedTools = observations.filter(o => o?.result?.ok === true && o?.result?.result?.completed === true).map(o => o.tool).filter(Boolean);
+    if (completedTools.length) {
+      model.limitations = (model.limitations || []).filter(name => !completedTools.includes(name));
+    }
     model.last_reflection = new Date().toISOString();
-    return this.persist(sessionId, model);
+    return this.persist(sessionId, normalize(model));
   }
 
   async persist(sessionId, model) {
-    const { error } = await this.db.from("jarvis_self_model").upsert({ session_id: sessionId, model, updated_at: new Date().toISOString() });
+    const { error } = await this.db.from("jarvis_self_model").upsert({ session_id: sessionId, model: normalize(model), updated_at: new Date().toISOString() });
     if (error) throw error;
     return model;
   }
+}
+
+function normalize(model) {
+  return {
+    ...DEFAULT_SELF,
+    ...model,
+    identity: { ...DEFAULT_SELF.identity, ...(model.identity || {}) },
+    goals: Array.isArray(model.goals) ? model.goals : [],
+    known_capabilities: Array.isArray(model.known_capabilities) ? model.known_capabilities : [],
+    learned_capabilities: Array.isArray(model.learned_capabilities) ? model.learned_capabilities : [],
+    limitations: Array.isArray(model.limitations) ? model.limitations : [],
+    lessons: Array.isArray(model.lessons) ? model.lessons : []
+  };
 }
 
 module.exports = { SelfModel, DEFAULT_SELF };
