@@ -30,16 +30,24 @@ class LearningEngine {
       await this.memory.remember(sessionId, { kind: "episode", content: lesson, metadata: { goal, success } });
     }
 
+    let procedure = null;
     if (procedureId) {
-      await this.procedures.recordOutcome(procedureId, success);
+      procedure = await this.procedures.recordOutcome(procedureId, success);
     } else if (success && this.hasExecutablePlan(plan)) {
-      await this.procedures.save(sessionId, {
+      procedure = await this.procedures.save(sessionId, {
         name: this.procedureName(goal), goal, steps: this.flattenPlan(plan), confidence: 0.6
       });
     }
 
+    if (procedure?.name) {
+      const self = await this.selfModel.ensure(sessionId);
+      const learned = new Set(self.learned_capabilities || []);
+      learned.add(procedure.name);
+      await this.selfModel.update(sessionId, { field: "learned_capabilities", value: [...learned] });
+    }
+
     await this.selfModel.reflect(sessionId, { goal, success, lesson, observations });
-    return { success, lesson, experience };
+    return { success, lesson, experience, procedure };
   }
 
   hasExecutablePlan(plan) {
@@ -57,6 +65,8 @@ class LearningEngine {
   isSuccessful(outcome, observations = []) {
     if (typeof outcome === "boolean") return outcome;
     if (observations.some(o => o?.result?.ok === false)) return false;
+    if (observations.some(o => o?.result?.result?.completed === false)) return false;
+    if (observations.some(o => o?.result?.result?.accepted === true && o?.result?.result?.completed !== true)) return false;
     return /success|complete|done|worked/i.test(String(outcome || ""));
   }
 
