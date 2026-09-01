@@ -37,6 +37,9 @@ class LearningEngine {
       procedure = await this.procedures.save(sessionId, {
         name: this.procedureName(goal), goal, steps: this.flattenPlan(plan), confidence: 0.6
       });
+      if (procedure?.id && Number(procedure.success_count) > 1) {
+        procedure = await this.procedures.recordOutcome(procedure.id, true);
+      }
     }
 
     if (procedure?.name) {
@@ -63,10 +66,10 @@ class LearningEngine {
   }
 
   isSuccessful(outcome, observations = []) {
-    if (typeof outcome === "boolean") return outcome;
     if (observations.some(o => o?.result?.ok === false)) return false;
     if (observations.some(o => o?.result?.result?.completed === false)) return false;
     if (observations.some(o => o?.result?.result?.accepted === true && o?.result?.result?.completed !== true)) return false;
+    if (typeof outcome === "boolean") return outcome;
     return /success|complete|done|worked/i.test(String(outcome || ""));
   }
 
@@ -74,8 +77,10 @@ class LearningEngine {
     if (!goal) return null;
     if (success) return `Successful experience for goal: ${goal}. Reusable procedure contains ${this.flattenPlan(plan).length} action(s).`;
     const failed = (observations || []).filter(o => o?.result?.ok === false);
-    if (!failed.length) return `Incomplete experience for goal: ${goal}. Outcome: ${String(outcome || "unknown")}`;
-    return `Failed experience for goal: ${goal}. Failed capability: ${failed.map(x => x.tool).join(", ")}. Errors: ${failed.map(x => x.result?.error || "unknown").join(" | ")}`;
+    const incomplete = (observations || []).filter(o => o?.result?.result?.completed === false || (o?.result?.result?.accepted === true && o?.result?.result?.completed !== true));
+    if (failed.length) return `Failed experience for goal: ${goal}. Failed capability: ${failed.map(x => x.tool).join(", ")}. Errors: ${failed.map(x => x.result?.error || "unknown").join(" | ")}`;
+    if (incomplete.length) return `Incomplete experience for goal: ${goal}. Accepted but not completed by: ${incomplete.map(x => x.tool).join(", ")}. JARVIS should verify completion before treating this route as successful.`;
+    return `Incomplete experience for goal: ${goal}. Outcome: ${String(outcome || "unknown")}`;
   }
 }
 
