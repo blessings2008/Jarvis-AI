@@ -48,19 +48,26 @@ Return ONLY valid JSON: {"thought_summary":"brief reasoning","decision":"respond
   async run({ session, userText, approvalToken = null }) {
     const observations = [], decisions = [];
     let acquisitionUsed = false;
+    let discoveredRoute = null;
     for (let step = 0; step < this.maxSteps; step++) {
-      const decision = await this.decide({ session, userText, observations }); decisions.push(decision);
-      for (const candidate of decision.memory_candidates) await this.memory.remember(session.id, candidate);
-      for (const update of decision.self_updates) await this.selfModel.update(session.id, update);
+      const decision = discoveredRoute ? { ...decisionFromRoute(discoveredRoute), memory_candidates: [], self_updates: [] } : await this.decide({ session, userText, observations });
+      decisions.push(decision);
+      for (const candidate of decision.memory_candidates || []) await this.memory.remember(session.id, candidate);
+      for (const update of decision.self_updates || []) await this.selfModel.update(session.id, update);
 
       if (decision.decision === "learn" && this.capabilityAcquisition && !acquisitionUsed) {
         acquisitionUsed = true;
         const acquisition = await this.capabilityAcquisition.acquire({ session, goal: userText, approvalToken });
         observations.push({ step, type: "capability_acquisition", result: acquisition });
-        if (acquisition.approval_required || !acquisition.acquired) {
+        if (acquisition.approval_required) {
           const learning = await this.learning.learnFromOutcome(session.id, { goal: userText, plan: decisions.map(d => d.tool_calls || []), observations, outcome: false });
-          return { decision: acquisition.approval_required ? "ask" : "respond", message: acquisition.approval_required ? "I found a route, but one or more capabilities require your approval before I can execute it." : "I could not discover a reliable route for that task yet, but I preserved what I learned.", tool_calls: [], decisions, observations, learning };
+          return { decision: "ask", message: "I found a route, but one or more capabilities require your approval before I can execute it.", tool_calls: [], decisions, observations, learning };
         }
+        if (!acquisition.acquired || !acquisition.route?.length) {
+          const learning = await this.learning.learnFromOutcome(session.id, { goal: userText, plan: decisions.map(d => d.tool_calls || []), observations, outcome: false });
+          return { decision: "respond", message: "I could not discover a reliable route for that task yet, but I preserved what I learned.", tool_calls: [], decisions, observations, learning };
+        }
+        discoveredRoute = acquisition.route;
         continue;
       }
 
@@ -77,9 +84,15 @@ Return ONLY valid JSON: {"thought_summary":"brief reasoning","decision":"respond
       }
       await this.worldModel.observe(session.id, { environment: { last_cycle: step, last_observations: observations.slice(-8) } });
       if (blocked) break;
+      discoveredRoute = null;
     }
     const learning = await this.learning.learnFromOutcome(session.id, { goal: userText, plan: decisions.map(d => d.tool_calls || []), observations, outcome: false });
     return { decision: "respond", message: "I could not safely complete the task within the current execution cycle. I preserved the observations for future reasoning.", tool_calls: [], decisions, observations, learning };
   }
 }
+
+function decisionFromRoute(route) {
+  return { decision: "act", message: "", tool_calls: Array.isArray(route) ? route : [] };
+}
+
 module.exports = { Cortex };
