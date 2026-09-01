@@ -4,7 +4,7 @@ class WorldModel {
   async snapshot(sessionId) {
     const { data, error } = await this.db.from("jarvis_world_state").select("state,updated_at").eq("session_id", sessionId).maybeSingle();
     if (error) throw error;
-    return data?.state || { devices: [], apps: [], services: [], resources: [], environment: {} };
+    return data?.state || { devices: [], apps: [], services: [], resources: [], capabilities: [], environment: {} };
   }
 
   async observe(sessionId, observation = {}) {
@@ -27,7 +27,13 @@ class WorldModel {
   }
 
   async registerCapabilities(sessionId, capabilities) {
-    return this.observe(sessionId, { capabilities: capabilities || [] });
+    const current = await this.snapshot(sessionId);
+    const merged = new Map((current.capabilities || []).filter(Boolean).map(capability => [capability.name || capability, capability]));
+    for (const capability of capabilities || []) {
+      const key = capability?.name || capability;
+      if (key) merged.set(key, capability);
+    }
+    return this.observe(sessionId, { capabilities: [...merged.values()] });
   }
 }
 
