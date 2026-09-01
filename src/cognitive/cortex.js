@@ -2,9 +2,11 @@ const DEFAULT_MAX_STEPS = 8;
 function safeJson(value) { try { return JSON.stringify(value); } catch { return "null"; } }
 
 class Cortex {
-  constructor({ model, client, memory, selfModel, tools, worldModel, procedures, learning, maxSteps = DEFAULT_MAX_STEPS }) {
-    this.model = model; this.client = client; this.memory = memory; this.selfModel = selfModel; this.tools = tools; this.worldModel = worldModel; this.procedures = procedures; this.learning = learning; this.maxSteps = maxSteps;
+  constructor({ model, client, memory, selfModel, tools, worldModel, procedures, learning, capabilityAcquisition = null, maxSteps = DEFAULT_MAX_STEPS }) {
+    this.model = model; this.client = client; this.memory = memory; this.selfModel = selfModel; this.tools = tools; this.worldModel = worldModel; this.procedures = procedures; this.learning = learning; this.capabilityAcquisition = capabilityAcquisition; this.maxSteps = maxSteps;
   }
+
+  setCapabilityAcquisition(acquisition) { this.capabilityAcquisition = acquisition; return this; }
 
   toolManifest(sessionId) { return this.tools.list(sessionId).map(t => ({ name: t.name, description: t.description, parameters: t.parameters || {}, risk: t.risk || "unknown" })); }
 
@@ -14,6 +16,7 @@ Understand the user's underlying objective, reason about it, plan, select capabi
 Rules:
 - Never claim a capability exists unless it appears in the manifest.
 - An unfamiliar request is not automatically impossible. Decompose it and investigate available capabilities.
+- If the goal requires discovering a new route from existing capabilities, choose decision "learn" rather than pretending the route is known.
 - A learned procedure is a hypothesis, not truth. Reuse it only when it matches the goal and available capabilities.
 - Do not confuse lack of knowledge with lack of capability.
 - Maintain uncertainty honestly and do not pretend to be conscious.
@@ -41,10 +44,23 @@ Return ONLY valid JSON: {"thought_summary":"brief reasoning","decision":"respond
 
   async run({ session, userText, approvalToken = null }) {
     const observations = [], decisions = [];
+    let acquisitionUsed = false;
     for (let step = 0; step < this.maxSteps; step++) {
       const decision = await this.decide({ session, userText, observations }); decisions.push(decision);
       for (const candidate of decision.memory_candidates) await this.memory.remember(session.id, candidate);
       for (const update of decision.self_updates) await this.selfModel.update(session.id, update);
+
+      if (decision.decision === "learn" && this.capabilityAcquisition && !acquisitionUsed) {
+        acquisitionUsed = true;
+        const acquisition = await this.capabilityAcquisition.acquire({ session, goal: userText, approvalToken });
+        observations.push({ step, type: "capability_acquisition", result: acquisition });
+        if (acquisition.approval_required || !acquisition.acquired) {
+          const learning = await this.learning.learnFromOutcome(session.id, { goal: userText, plan: decisions.map(d => d.tool_calls || []), observations, outcome: false });
+          return { decision: acquisition.approval_required ? "ask" : "respond", message: acquisition.approval_required ? "I found a route, but one or more capabilities require your approval before I can execute it." : "I could not discover a reliable route for that task yet, but I preserved what I learned.", tool_calls: [], decisions, observations, learning };
+        }
+        continue;
+      }
+
       if (decision.decision !== "act" || !decision.tool_calls.length) {
         const outcome = decision.decision === "finish" ? true : null;
         const learning = await this.learning.learnFromOutcome(session.id, { goal: userText, plan: decisions.map(d => d.tool_calls || []), observations, outcome });
