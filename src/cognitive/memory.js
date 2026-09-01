@@ -12,23 +12,34 @@ class Memory {
   }
 
   async recall(sessionId, query, limit = 12) {
-    // Phase 1 intentionally uses recent memory. A vector index can be added
-    // later without changing the Cortex interface.
     const { data, error } = await this.db.from("jarvis_memory")
       .select("id,kind,content,metadata,created_at")
       .eq("session_id", sessionId)
       .order("created_at", { ascending: false })
-      .limit(Math.max(limit * 3, 30));
+      .limit(Math.max(limit * 5, 50));
     if (error) throw error;
-    const words = String(query || "").toLowerCase().split(/\\W+/).filter(Boolean);
-    return (data || []).sort((a,b) => score(b, words) - score(a, words)).slice(0, limit);
+    const words = [...new Set(String(query || "").toLowerCase().split(/\W+/).filter(w => w.length > 1))];
+    const now = Date.now();
+    return (data || [])
+      .map(item => ({ ...item, relevance: score(item, words), recency: recency(item.created_at, now) }))
+      .sort((a, b) => {
+        const scoreA = a.relevance * 0.75 + a.recency * 0.25;
+        const scoreB = b.relevance * 0.75 + b.recency * 0.25;
+        return scoreB - scoreA;
+      })
+      .slice(0, limit);
   }
 }
 
 function score(item, words) {
   if (!words.length) return 0;
   const text = `${item.kind} ${item.content}`.toLowerCase();
-  return words.reduce((n, w) => n + (text.includes(w) ? 1 : 0), 0);
+  return words.reduce((n, w) => n + (text.includes(w) ? 1 : 0), 0) / words.length;
+}
+
+function recency(createdAt, now) {
+  const ageHours = Math.max(0, (now - new Date(createdAt).getTime()) / 3600000);
+  return 1 / (1 + ageHours / 168);
 }
 
 module.exports = { Memory };
