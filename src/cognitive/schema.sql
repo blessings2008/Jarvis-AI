@@ -56,3 +56,9 @@ create table if not exists jarvis_capabilities (
   unique(session_id, name)
 );
 create index if not exists idx_jarvis_capabilities_session_enabled on jarvis_capabilities(session_id, enabled);
+
+create table if not exists jarvis_world_state (
+  session_id text primary key references jarvis_sessions(session_id) on delete cascade,
+  state jsonb not null default '{"devices":[],"apps":[],"services":[],"resources":[],"environment":{}}',
+  updated_at timestamptz not null default now()
+);
