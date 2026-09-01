@@ -1,16 +1,12 @@
 const DEFAULT_MAX_STEPS = 8;
-
-function safeJson(value) {
-  try { return JSON.stringify(value); } catch { return "null"; }
-}
+function safeJson(value) { try { return JSON.stringify(value); } catch { return "null"; } }
 
 class Cortex {
   constructor({ model, client, memory, selfModel, tools, worldModel, procedures, learning, maxSteps = DEFAULT_MAX_STEPS }) {
-    this.model = model; this.client = client; this.memory = memory; this.selfModel = selfModel;
-    this.tools = tools; this.worldModel = worldModel; this.procedures = procedures; this.learning = learning; this.maxSteps = maxSteps;
+    this.model = model; this.client = client; this.memory = memory; this.selfModel = selfModel; this.tools = tools; this.worldModel = worldModel; this.procedures = procedures; this.learning = learning; this.maxSteps = maxSteps;
   }
 
-  toolManifest() { return this.tools.list().map(t => ({ name: t.name, description: t.description, parameters: t.parameters || {}, risk: t.risk || "unknown" })); }
+  toolManifest(sessionId) { return this.tools.list(sessionId).map(t => ({ name: t.name, description: t.description, parameters: t.parameters || {}, risk: t.risk || "unknown" })); }
 
   systemPrompt() {
     return `You are JARVIS, a persistent cognitive agent. You are not a command matcher.
@@ -32,7 +28,7 @@ Return ONLY valid JSON: {"thought_summary":"brief reasoning","decision":"respond
     const self = await this.selfModel.snapshot(session.id);
     const world = await this.worldModel.snapshot(session.id);
     const procedures = await this.procedures.search(session.id, userText);
-    const context = { user: userText, recent_observations: observations.slice(-8), memories: memories.slice(0, 12), self_model: self, world_model: world, learned_procedures: procedures, capabilities: this.toolManifest() };
+    const context = { user: userText, recent_observations: observations.slice(-8), memories: memories.slice(0, 12), self_model: self, world_model: world, learned_procedures: procedures, capabilities: this.toolManifest(session.id) };
     const completion = await this.client.chat.completions.create({ model: this.model, temperature: 0.2, response_format: { type: "json_object" }, messages: [{ role: "system", content: this.systemPrompt() }, { role: "user", content: safeJson(context) }] });
     const raw = completion.choices?.[0]?.message?.content || "{}";
     let result; try { result = JSON.parse(raw); } catch { result = { decision: "respond", message: raw, tool_calls: [] }; }
@@ -67,5 +63,4 @@ Return ONLY valid JSON: {"thought_summary":"brief reasoning","decision":"respond
     return { decision: "respond", message: "I could not safely complete the task within the current execution cycle. I preserved the observations for future reasoning.", tool_calls: [], decisions, observations, learning };
   }
 }
-
 module.exports = { Cortex };
