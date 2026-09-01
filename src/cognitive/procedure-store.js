@@ -9,8 +9,37 @@ class ProcedureStore {
   }
 
   async save(sessionId, procedure) {
-    const row = { session_id: sessionId, name: String(procedure.name || "learned-procedure"), goal: String(procedure.goal || ""), steps: procedure.steps || [], confidence: Number(procedure.confidence ?? 0.6), success_count: 1, failure_count: 0, status: "active", updated_at: new Date().toISOString() };
-    const { data, error } = await this.db.from("jarvis_procedures").upsert(row, { onConflict: "session_id,name" }).select().single();
+    const name = String(procedure.name || "learned-procedure");
+    const row = {
+      session_id: sessionId,
+      name,
+      goal: String(procedure.goal || ""),
+      steps: procedure.steps || [],
+      confidence: Number(procedure.confidence ?? 0.6),
+      updated_at: new Date().toISOString()
+    };
+
+    const { data: existing, error: readError } = await this.db.from("jarvis_procedures").select("id,success_count,failure_count,status").eq("session_id", sessionId).eq("name", name).maybeSingle();
+    if (readError) throw readError;
+
+    if (existing) {
+      const { data, error } = await this.db.from("jarvis_procedures").update({
+        goal: row.goal,
+        steps: row.steps,
+        confidence: row.confidence,
+        status: existing.status === "retired" ? "active" : existing.status,
+        updated_at: row.updated_at
+      }).eq("id", existing.id).select().single();
+      if (error) throw error;
+      return data;
+    }
+
+    const { data, error } = await this.db.from("jarvis_procedures").insert({
+      ...row,
+      success_count: 1,
+      failure_count: 0,
+      status: "active"
+    }).select().single();
     if (error) throw error;
     return data;
   }
