@@ -7,14 +7,23 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY }); const supabase = cr
 const tools = new ToolRegistry(); const memory = new Memory(supabase); const selfModel = new SelfModel(supabase); const procedures = new ProcedureStore(supabase); const capabilityBus = new CapabilityBus(supabase); const worldModel = new WorldModel(supabase); const authority = new Authority();
 const learning = new LearningEngine({ db: supabase, memory, selfModel, procedures });
 const cortex = new Cortex({ model: process.env.GROQ_MODEL || "openai/gpt-oss-20b", client: groq, memory, selfModel, tools, worldModel, procedures, learning });
-const capabilityAcquisition = new CapabilityAcquisition({ cortex, tools, procedures, learning });
+const capabilityAcquisition = new CapabilityAcquisition({ cortex, tools, procedures });
 cortex.setCapabilityAcquisition(capabilityAcquisition);
+
+function guardedCapability(capability) {
+  return {
+    name: capability.name,
+    description: capability.description,
+    parameters: capability.parameters,
+    risk: capability.risk,
+    execute: async args => ({ dispatch: true, name: capability.name, arguments: args }),
+    authorize: async (args, context) => authority.authorize(capability, args, context)
+  };
+}
 
 async function hydrateSessionCapabilities(sessionId) {
   const saved = await capabilityBus.list(sessionId);
-  for (const capability of saved) {
-    tools.register(sessionId, { ...capability, execute: async args => ({ dispatch: true, name: capability.name, arguments: args }), authorize: async (args, context) => (await authority.authorize(capability, args, context)).allowed });
-  }
+  for (const capability of saved) tools.register(sessionId, guardedCapability(capability));
   await selfModel.update(sessionId, { field: "known_capabilities", value: saved.map(c => c.name) });
   return saved;
 }
@@ -26,7 +35,7 @@ app.post("/api/capabilities", async (req, res) => {
     for (const capability of incoming) {
       if (!capability?.name) continue;
       const saved = await capabilityBus.register(sessionId, capability);
-      tools.register(sessionId, { name: saved.name, description: saved.description, parameters: saved.parameters, risk: saved.risk, execute: async args => ({ dispatch: true, name: saved.name, arguments: args }), authorize: async (args, context) => (await authority.authorize(saved, args, context)).allowed });
+      tools.register(sessionId, guardedCapability(saved));
     }
     const capabilities = await hydrateSessionCapabilities(sessionId);
     await worldModel.registerCapabilities(sessionId, capabilities);
