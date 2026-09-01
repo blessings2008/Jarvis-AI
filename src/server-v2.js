@@ -1,12 +1,14 @@
 require("dotenv").config();
 const express = require("express"); const cors = require("cors"); const Groq = require("groq-sdk"); const { createClient } = require("@supabase/supabase-js");
-const { Cortex } = require("./cognitive/cortex"); const { LearningEngine } = require("./cognitive/learning"); const { Memory } = require("./cognitive/memory"); const { SelfModel } = require("./cognitive/self-model"); const { ToolRegistry } = require("./cognitive/tool-registry"); const { ProcedureStore } = require("./cognitive/procedure-store"); const { CapabilityBus } = require("./cognitive/capability-bus"); const { WorldModel } = require("./cognitive/world-model"); const { Authority } = require("./cognitive/authority");
+const { Cortex } = require("./cognitive/cortex"); const { LearningEngine } = require("./cognitive/learning"); const { Memory } = require("./cognitive/memory"); const { SelfModel } = require("./cognitive/self-model"); const { ToolRegistry } = require("./cognitive/tool-registry"); const { ProcedureStore } = require("./cognitive/procedure-store"); const { CapabilityBus } = require("./cognitive/capability-bus"); const { WorldModel } = require("./cognitive/world-model"); const { Authority } = require("./cognitive/authority"); const { CapabilityAcquisition } = require("./cognitive/capability-acquisition");
 
 const app = express(); app.use(cors()); app.use(express.json({ limit: "5mb" }));
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY }); const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const tools = new ToolRegistry(); const memory = new Memory(supabase); const selfModel = new SelfModel(supabase); const procedures = new ProcedureStore(supabase); const capabilityBus = new CapabilityBus(supabase); const worldModel = new WorldModel(supabase); const authority = new Authority();
 const learning = new LearningEngine({ db: supabase, memory, selfModel, procedures });
 const cortex = new Cortex({ model: process.env.GROQ_MODEL || "openai/gpt-oss-20b", client: groq, memory, selfModel, tools, worldModel, procedures, learning });
+const capabilityAcquisition = new CapabilityAcquisition({ cortex, tools, procedures, learning });
+cortex.setCapabilityAcquisition(capabilityAcquisition);
 
 async function hydrateSessionCapabilities(sessionId) {
   const saved = await capabilityBus.list(sessionId);
