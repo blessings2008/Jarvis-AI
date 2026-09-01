@@ -1,28 +1,26 @@
 class ToolRegistry {
   constructor() { this.tools = new Map(); }
 
-  register(tool) {
-    if (!tool?.name || typeof tool.execute !== "function") throw new Error("Invalid tool definition");
-    this.tools.set(tool.name, Object.freeze({ ...tool }));
-    return this.tools.get(tool.name);
+  key(sessionId, name) { return `${sessionId}:${name}`; }
+
+  register(sessionId, tool) {
+    if (!sessionId || !tool?.name || typeof tool.execute !== "function") throw new Error("Invalid session-scoped tool definition");
+    const value = Object.freeze({ ...tool, sessionId });
+    this.tools.set(this.key(sessionId, tool.name), value);
+    return value;
   }
 
-  unregister(name) { return this.tools.delete(name); }
-  get(name) { return this.tools.get(name); }
-  list() { return [...this.tools.values()]; }
+  unregister(sessionId, name) { return this.tools.delete(this.key(sessionId, name)); }
+  get(sessionId, name) { return this.tools.get(this.key(sessionId, name)); }
+  list(sessionId) { return [...this.tools.values()].filter(t => t.sessionId === sessionId); }
 
-  async execute(name, args, context) {
-    const tool = this.get(name);
+  async execute(name, args, context = {}) {
+    const sessionId = context.session?.id;
+    const tool = this.get(sessionId, name);
     if (!tool) return { ok: false, error: `Unknown capability: ${name}` };
-    if (tool.authorize && !(await tool.authorize(args, context))) {
-      return { ok: false, status: "permission_required", error: `Permission required for ${name}` };
-    }
-    try {
-      const result = await tool.execute(args, context);
-      return { ok: true, result };
-    } catch (error) {
-      return { ok: false, error: error.message, retryable: Boolean(error.retryable) };
-    }
+    if (tool.authorize && !(await tool.authorize(args, context))) return { ok: false, status: "permission_required", error: `Permission required for ${name}` };
+    try { return { ok: true, result: await tool.execute(args, context) }; }
+    catch (error) { return { ok: false, error: error.message, retryable: Boolean(error.retryable) }; }
   }
 }
 
