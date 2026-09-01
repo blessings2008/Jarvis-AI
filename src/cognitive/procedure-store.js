@@ -60,7 +60,7 @@ class ProcedureStore {
 
     const { data, error } = await this.db.from("jarvis_procedures").insert({
       ...row,
-      success_count: 1,
+      success_count: 0,
       failure_count: 0,
       status: "active"
     }).select().single();
