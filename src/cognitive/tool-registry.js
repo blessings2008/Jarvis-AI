@@ -18,9 +18,24 @@ class ToolRegistry {
     const sessionId = context.session?.id;
     const tool = this.get(sessionId, name);
     if (!tool) return { ok: false, error: `Unknown capability: ${name}` };
-    if (tool.authorize && !(await tool.authorize(args, context))) return { ok: false, status: "permission_required", error: `Permission required for ${name}` };
-    try { return { ok: true, result: await tool.execute(args, context) }; }
-    catch (error) { return { ok: false, error: error.message, retryable: Boolean(error.retryable) }; }
+
+    if (tool.authorize) {
+      const authorization = await tool.authorize(args, context);
+      if (authorization !== true && authorization?.allowed !== true) {
+        return {
+          ok: false,
+          status: "permission_required",
+          risk: authorization?.risk || tool.risk || "unknown",
+          error: authorization?.reason || `Permission required for ${name}`
+        };
+      }
+    }
+
+    try {
+      return { ok: true, result: await tool.execute(args, context) };
+    } catch (error) {
+      return { ok: false, error: error.message, retryable: Boolean(error.retryable) };
+    }
   }
 }
 
