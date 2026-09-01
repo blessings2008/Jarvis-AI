@@ -37,9 +37,7 @@ class LearningEngine {
       procedure = await this.procedures.save(sessionId, {
         name: this.procedureName(goal), goal, steps: this.flattenPlan(plan), confidence: 0.6
       });
-      if (procedure?.id && Number(procedure.success_count) > 1) {
-        procedure = await this.procedures.recordOutcome(procedure.id, true);
-      }
+      procedure = await this.procedures.recordOutcome(procedure.id, true);
     }
 
     if (procedure?.name) {
