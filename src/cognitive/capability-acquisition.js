@@ -1,68 +1,73 @@
 const DEFAULT_MAX_ATTEMPTS = 4;
 
 /**
- * Discovers a route without claiming that discovery itself completed the
- * user's goal. The normal Cortex loop owns final execution and learning.
+ * Capability acquisition discovers and evaluates a candidate route. It never
+ * executes action tools while investigating, preventing discovery from
+ * causing side effects or executing the same route twice.
  */
 class CapabilityAcquisition {
-  constructor({ cortex, tools, procedures, learning, maxAttempts = DEFAULT_MAX_ATTEMPTS }) {
+  constructor({ cortex, tools, procedures, maxAttempts = DEFAULT_MAX_ATTEMPTS }) {
     this.cortex = cortex;
     this.tools = tools;
     this.procedures = procedures;
-    this.learning = learning;
     this.maxAttempts = maxAttempts;
   }
 
   async investigate({ session, goal, observations = [] }) {
     const decision = await this.cortex.decide({ session, userText: goal, observations });
+    const route = Array.isArray(decision.tool_calls) ? decision.tool_calls : [];
+    const capabilities = this.cortex.toolManifest(session.id);
+    const available = new Set(capabilities.map(capability => capability.name));
+    const invalid = route.filter(call => !available.has(call?.name));
+
     return {
       decision,
-      capabilities: this.cortex.toolManifest(session.id),
-      learned_procedures: await this.procedures.search(session.id, goal)
+      route,
+      capabilities,
+      learned_procedures: await this.procedures.search(session.id, goal),
+      valid_route: route.length > 0 && invalid.length === 0,
+      invalid_calls: invalid
     };
   }
 
-  async acquire({ session, goal, approvalToken = null }) {
+  async acquire({ session, goal }) {
     const observations = [];
     const decisions = [];
 
     for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
       const investigation = await this.investigate({ session, goal, observations });
-      const decision = investigation.decision;
-      decisions.push(decision);
+      decisions.push(investigation.decision);
 
-      if (!Array.isArray(decision.tool_calls) || decision.tool_calls.length === 0) {
-        return { acquired: false, reason: "no executable route discovered", observations, decisions, learning_recorded: false };
-      }
-
-      let blocked = false;
-      let useful = false;
-      for (const call of decision.tool_calls) {
-        const result = await this.tools.execute(call.name, call.arguments || {}, {
-          session, goal, cycle: attempt, approvalToken, acquisition: true, discovery: true
+      if (!investigation.valid_route) {
+        observations.push({
+          attempt,
+          type: "route_validation",
+          valid: false,
+          invalid_calls: investigation.invalid_calls,
+          reason: investigation.route.length ? "route contains unavailable capabilities" : "no executable route discovered"
         });
-        observations.push({ attempt, tool: call.name, arguments: call.arguments || {}, result });
-        if (result.status === "permission_required") blocked = true;
-        if (result.ok) useful = true;
+        continue;
       }
 
-      if (blocked) {
-        return { acquired: false, reason: "approval required", observations, decisions, approval_required: true, learning_recorded: false };
-      }
-
-      if (useful && observations.every(o => o.result?.ok !== false)) {
-        return {
-          acquired: true,
-          reason: "route discovered and tested",
-          observations,
-          decisions,
-          route: decisions.at(-1)?.tool_calls || [],
-          learning_recorded: false
-        };
-      }
+      return {
+        acquired: true,
+        reason: "route discovered and validated against the current capability manifest",
+        observations,
+        decisions,
+        route: investigation.route,
+        learning_recorded: false,
+        requires_execution: true
+      };
     }
 
-    return { acquired: false, reason: "no reliable route found", observations, decisions, learning_recorded: false };
+    return {
+      acquired: false,
+      reason: "no valid route found",
+      observations,
+      decisions,
+      learning_recorded: false,
+      requires_execution: false
+    };
   }
 }
 
