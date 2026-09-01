@@ -2,10 +2,34 @@ class ProcedureStore {
   constructor(db) { this.db = db; }
 
   async search(sessionId, goal) {
-    const { data, error } = await this.db.from("jarvis_procedures").select("id,name,goal,steps,confidence,success_count,failure_count,status,updated_at").eq("session_id", sessionId).eq("status", "active").order("confidence", { ascending: false }).limit(30);
+    const { data, error } = await this.db.from("jarvis_procedures").select("id,name,goal,steps,confidence,success_count,failure_count,status,updated_at").eq("session_id", sessionId).order("updated_at", { ascending: false }).limit(100);
     if (error) throw error;
-    const terms = String(goal || "").toLowerCase().split(/\W+/).filter(Boolean);
-    return (data || []).filter(p => terms.length === 0 || terms.some(t => String(p.goal || "").toLowerCase().includes(t) || String(p.name || "").toLowerCase().includes(t))).slice(0, 8);
+    const terms = [...new Set(String(goal || "").toLowerCase().split(/\W+/).filter(t => t.length > 1))];
+    return (data || [])
+      .map(p => {
+        const haystack = `${p.goal || ""} ${p.name || ""}`.toLowerCase();
+        const matches = terms.filter(t => haystack.includes(t)).length;
+        const successes = Number(p.success_count || 0);
+        const failures = Number(p.failure_count || 0);
+        const total = successes + failures;
+        const reliability = total ? successes / total : Number(p.confidence || 0);
+        const failedRecently = failures > 0 && failures >= successes;
+        return {
+          ...p,
+          relevance: terms.length ? matches / terms.length : 0,
+          reliability,
+          failed_recently: failedRecently,
+          recommendation: p.status === "retired" ? "avoid" : failedRecently ? "revise_or_verify" : "consider"
+        };
+      })
+      .filter(p => terms.length === 0 || p.relevance > 0)
+      .sort((a, b) => {
+        if (a.status !== b.status) return a.status === "active" ? -1 : 1;
+        const scoreA = a.relevance * 0.55 + a.reliability * 0.35 + Number(a.confidence || 0) * 0.1;
+        const scoreB = b.relevance * 0.55 + b.reliability * 0.35 + Number(b.confidence || 0) * 0.1;
+        return scoreB - scoreA;
+      })
+      .slice(0, 8);
   }
 
   async save(sessionId, procedure) {
