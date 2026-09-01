@@ -1,17 +1,16 @@
 {
   "name": "jarvis-backend",
-  "version": "0.7.0",
-  "description": "JARVIS AI backend — Groq + Supabase persistence",
-  "main": "server.js",
+  "version": "1.0.0-cognitive",
+  "description": "JARVIS cognitive agent backend",
+  "main": "src/server-v2.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node src/server-v2.js"
   },
   "dependencies": {
     "express": "^4.19.2",
     "cors": "^2.8.5",
     "groq-sdk": "^0.7.0",
     "dotenv": "^16.4.5",
-    "express-rate-limit": "^7.4.0",
     "@supabase/supabase-js": "^2.45.4"
   }
 }
