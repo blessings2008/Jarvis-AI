@@ -10,6 +10,11 @@ const cortex = new Cortex({ model: process.env.GROQ_MODEL || "openai/gpt-oss-20b
 const capabilityAcquisition = new CapabilityAcquisition({ cortex, tools, procedures });
 cortex.setCapabilityAcquisition(capabilityAcquisition);
 
+async function ensureSession(sessionId) {
+  const { error } = await supabase.from("jarvis_sessions").upsert({ session_id: sessionId }, { onConflict: "session_id", ignoreDuplicates: true });
+  if (error) throw error;
+}
+
 function guardedCapability(capability) {
   return {
     name: capability.name,
@@ -32,6 +37,7 @@ app.post("/api/capabilities", async (req, res) => {
   const sessionId = String(req.body?.sessionId || "").trim(); const incoming = Array.isArray(req.body?.capabilities) ? req.body.capabilities : [];
   if (!sessionId) return res.status(400).json({ error: "sessionId required" });
   try {
+    await ensureSession(sessionId);
     for (const capability of incoming) {
       if (!capability?.name) continue;
       const saved = await capabilityBus.register(sessionId, capability);
@@ -43,16 +49,17 @@ app.post("/api/capabilities", async (req, res) => {
   } catch (error) { res.status(500).json({ ok: false, error: error.message }); }
 });
 
-app.post("/api/world", async (req, res) => { const sessionId = String(req.body?.sessionId || "").trim(); if (!sessionId) return res.status(400).json({ error: "sessionId required" }); try { res.json({ ok: true, world: await worldModel.observe(sessionId, req.body?.observation || {}) }); } catch (error) { res.status(500).json({ ok: false, error: error.message }); } });
+app.post("/api/world", async (req, res) => { const sessionId = String(req.body?.sessionId || "").trim(); if (!sessionId) return res.status(400).json({ error: "sessionId required" }); try { await ensureSession(sessionId); res.json({ ok: true, world: await worldModel.observe(sessionId, req.body?.observation || {}) }); } catch (error) { res.status(500).json({ ok: false, error: error.message }); } });
 app.get("/api/health", async (_req, res) => { const { error } = await supabase.from("jarvis_sessions").select("session_id").limit(1); res.json({ ok: true, brain: "cognitive-v1", database: error ? "unreachable" : "connected" }); });
-app.get("/api/self", async (req, res) => { const sessionId = String(req.query.sessionId || ""); if (!sessionId) return res.status(400).json({ error: "sessionId required" }); try { res.json(await selfModel.ensure(sessionId)); } catch (error) { res.status(500).json({ error: error.message }); } });
-app.get("/api/world", async (req, res) => { const sessionId = String(req.query.sessionId || ""); if (!sessionId) return res.status(400).json({ error: "sessionId required" }); try { res.json(await worldModel.snapshot(sessionId)); } catch (error) { res.status(500).json({ error: error.message }); } });
-app.get("/api/memory", async (req, res) => { const sessionId = String(req.query.sessionId || ""); if (!sessionId) return res.status(400).json({ error: "sessionId required" }); try { res.json(await memory.recall(sessionId, String(req.query.q || ""), 50)); } catch (error) { res.status(500).json({ error: error.message }); } });
+app.get("/api/self", async (req, res) => { const sessionId = String(req.query.sessionId || ""); if (!sessionId) return res.status(400).json({ error: "sessionId required" }); try { await ensureSession(sessionId); res.json(await selfModel.ensure(sessionId)); } catch (error) { res.status(500).json({ error: error.message }); } });
+app.get("/api/world", async (req, res) => { const sessionId = String(req.query.sessionId || ""); if (!sessionId) return res.status(400).json({ error: "sessionId required" }); try { await ensureSession(sessionId); res.json(await worldModel.snapshot(sessionId)); } catch (error) { res.status(500).json({ error: error.message }); } });
+app.get("/api/memory", async (req, res) => { const sessionId = String(req.query.sessionId || ""); if (!sessionId) return res.status(400).json({ error: "sessionId required" }); try { await ensureSession(sessionId); res.json(await memory.recall(sessionId, String(req.query.q || ""), 50)); } catch (error) { res.status(500).json({ error: error.message }); } });
 
 app.post("/api/chat", async (req, res) => {
   const sessionId = String(req.body?.sessionId || "").trim(); const message = String(req.body?.message || "").trim(); const approvalToken = req.body?.approvalToken || null;
   if (!sessionId || !message) return res.status(400).json({ error: "sessionId and message required" });
   try {
+    await ensureSession(sessionId);
     await selfModel.ensure(sessionId); await hydrateSessionCapabilities(sessionId);
     const result = await cortex.run({ session: { id: sessionId }, userText: message, approvalToken });
     res.json({ ok: true, message: result.message || "", decision: result.decision, confidence: result.confidence, tool_calls: result.tool_calls || [], observations: result.observations || [], learning: result.learning || null });
