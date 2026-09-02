@@ -1,5 +1,9 @@
 const DEFAULT_MAX_STEPS = 8;
 function safeJson(value) { try { return JSON.stringify(value); } catch { return "null"; } }
+function explicitMemory(text) {
+  const match = String(text || "").trim().match(/^(?:please\s+)?(?:remember|don't forget|do not forget)(?:\s+that)?\s+(.+)$/i);
+  return match?.[1]?.trim() || null;
+}
 
 class Cortex {
   constructor({ model, client, memory, selfModel, tools, worldModel, procedures, learning, capabilityAcquisition = null, maxSteps = DEFAULT_MAX_STEPS }) {
@@ -17,6 +21,7 @@ Rules:
 - Never claim a capability exists unless it appears in the manifest.
 - An unfamiliar request is not automatically impossible. Decompose it and investigate available capabilities.
 - If the user explicitly asks you to remember, save, keep, or never forget a personal fact, preference, instruction, or other information, treat that as a memory operation: create a memory_candidates entry with the useful information and answer that it was remembered. Do not require an Android tool for memory.
+- Explicit memory requests are persisted by the cognitive core before reasoning, so do not invent a different remembered fact.
 - If the user asks what you remember, use recalled memories and answer from them; do not invent memories.
 - If the goal requires discovering a new route from existing capabilities, choose decision "learn" rather than pretending the route is known.
 - A learned procedure is a hypothesis, not truth. Reuse it only when it matches the goal and available capabilities.
@@ -49,6 +54,10 @@ Return ONLY valid JSON: {"thought_summary":"brief reasoning","decision":"respond
 
   async run({ session, userText, approvalToken = null }) {
     const observations = [], decisions = [];
+    const forcedMemory = explicitMemory(userText);
+    if (forcedMemory) {
+      await this.memory.remember(session.id, { kind: "fact", content: forcedMemory, metadata: { source: "explicit_user_request" } });
+    }
     let acquisitionUsed = false;
     let discoveredRoute = null;
     for (let step = 0; step < this.maxSteps; step++) {
@@ -56,6 +65,14 @@ Return ONLY valid JSON: {"thought_summary":"brief reasoning","decision":"respond
       decisions.push(decision);
       for (const candidate of decision.memory_candidates || []) await this.memory.remember(session.id, candidate);
       for (const update of decision.self_updates || []) await this.selfModel.update(session.id, update);
+
+      if (forcedMemory && step === 0) {
+        decision.message = `Got it. I'll remember that: ${forcedMemory}`;
+        decision.decision = "finish";
+        decision.tool_calls = [];
+        const learning = await this.learning.learnFromOutcome(session.id, { goal: userText, plan: [], observations, outcome: true });
+        return { ...decision, decisions, observations, learning };
+      }
 
       if (decision.decision === "learn" && this.capabilityAcquisition && !acquisitionUsed) {
         acquisitionUsed = true;
